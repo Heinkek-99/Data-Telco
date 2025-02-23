@@ -1,0 +1,22 @@
+stages:
+  - build
+  - test
+  - deploy
+
+build:
+  stage: build
+  script:
+    - echo "Installation des dépendances..."
+    - pip install pandas mysql-connector-python matplotlib
+
+test:
+  stage: test
+  script:
+    - echo "Exécution des tests..."
+    - python data_pipeline.py
+
+deploy:
+  stage: deploy
+  script:
+    - echo "Déploiement des résultats..."
+    - echo "Projet déployé avec succès !"
