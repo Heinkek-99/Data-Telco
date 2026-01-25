@@ -1,9 +1,14 @@
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+
 import os
 import logging
 from pathlib import Path
@@ -17,6 +22,7 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import base64
+from contextlib import asynccontextmanager  
 
 # PDF Generation using reportlab
 from reportlab.lib import colors
@@ -42,14 +48,40 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'telco-analytics-secret-key-2024')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24
 
-# Create the main app
-app = FastAPI(title="Telco Customer Analytics API")
+# ============== LIFESPAN ==============
 
-# Create a router with the /api prefix
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gestion du cycle de vie de l'application"""
+    # Startup
+    logger.info("Starting Telco Analytics API...")
+    try:
+        await load_telco_data()
+        logger.info("Data loaded successfully")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down...")
+    client.close()
+
+# ============== APP CREATION ==============
+
+# Create the main app
+app = FastAPI(
+    title="Telco Customer Analytics API",
+    description="API pour l'analyse et la prédiction du churn des clients dans le secteur des télécommunications.",
+    version="1.0.0",
+    lifespan = lifespan
+    )
+
+# Create a router with the /api prefix  
 api_router = APIRouter(prefix="/api")
 
 # Security
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Configure logging
 logging.basicConfig(
@@ -133,13 +165,28 @@ def create_token(user_id: str, email: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token manquant",
+            headers={"WWW-Authenticate": "Bearer"}
+    )
+     
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expiré")
+        raise HTTPException(
+            status_code=401,
+            detail="Token expiré",
+            headers={"WWW-Authenticate": "Bearer"}
+            )
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Token invalide")
+        raise HTTPException(
+            status_code=401,
+            detail="Token invalide",
+            headers={"WWW-Authenticate": "Bearer"}
+            )
 
 # ============== DATA LOADING ==============
 
@@ -152,36 +199,46 @@ async def load_telco_data():
         return telco_data
     
     # Check if data exists in MongoDB
-    count = await db.customers.count_documents({})
-    if count > 0:
-        cursor = db.customers.find({}, {"_id": 0})
-        data = await cursor.to_list(length=10000)
-        telco_data = pd.DataFrame(data)
-        return telco_data
+    try:
+        count = await db.customers.count_documents({})
+        if count > 0:
+            cursor = db.customers.find({}, {"_id": 0})
+            data = await cursor.to_list(length=10000)
+            logger.info(f"Loaded {len(telco_data)} records from MongoDB")
+            telco_data = pd.DataFrame(data)
+            return telco_data
+    except Exception as e:
+        logger.error(f"Error loading data from MongoDB: {e}")   
     
     # Load from CSV URL
     try:
-        csv_url = "https://raw.githubusercontent.com/Heinkek-99/Data-Telco/main/data/Telco-Customer-Churn.csv"
+        csv_url = "../data/Telco-Customer-Churn.csv"
         telco_data = pd.read_csv(csv_url)
         
         # Clean data
         telco_data['TotalCharges'] = pd.to_numeric(telco_data['TotalCharges'], errors='coerce')
         telco_data['TotalCharges'].fillna(0, inplace=True)
         telco_data['Churn'] = telco_data['Churn'].map({'Yes': 1, 'No': 0})
-        
+
+        logger.info(f"Loaded {len(telco_data)} customer records from CSV")
+
         # Store in MongoDB
-        records = telco_data.to_dict('records')
-        if records:
-            await db.customers.delete_many({})
-            await db.customers.insert_many(records)
-        
-        logger.info(f"Loaded {len(telco_data)} customer records")
+        try:
+            records = telco_data.to_dict('records')
+            if records:
+                await db.customers.delete_many({})
+                await db.customers.insert_many(records)
+                logger.info(f"Data stored in MongoDB successfully, Loaded {len(telco_data)} customer records")
+        except Exception as e:
+            logger.error(f"Error storing data in MongoDB: {e}")
+
+        # logger.info(f"Loaded {len(telco_data)} customer records")
         return telco_data
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         # Return sample data
-        telco_data = create_sample_data()
-        return telco_data
+        # telco_data = create_sample_data()
+        return null
 
 def create_sample_data():
     np.random.seed(42)
@@ -676,187 +733,223 @@ def generate_chart_base64(chart_type: str, data: dict) -> str:
 
 @api_router.post("/reports/generate-pdf")
 async def generate_pdf_report(request: ReportRequest, current_user: dict = Depends(get_current_user)):
-    df = await load_telco_data()
+    try:
+        df = await load_telco_data()
+        
+        # Calculate KPIs
+        total_customers = len(df)
+        churn_rate = round((df['Churn'].sum() / total_customers) * 100, 2)
+        arpu = round(df['MonthlyCharges'].mean(), 2)
+        clv = round(df['TotalCharges'].mean(), 2)
+        
+        # Generate charts as images
+        chart_files = {}
+        
+        # Segment pie chart
+        plt.style.use('default')
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+        segment_labels = ['Premium', 'Heavy Data', 'Voice Only', 'Low ARPU', 'At-Risk', 'Loyal']
+        segment_values = [15, 22, 18, 20, 13, 12]
+        colors_pie = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4']
+        ax.pie(segment_values, labels=segment_labels, autopct='%1.1f%%', colors=colors_pie)
+        ax.set_title('Répartition des Segments Clients', fontsize=14, fontweight='bold')
+        segment_buf = BytesIO()
+        fig.savefig(segment_buf, format='png', bbox_inches='tight', dpi=100)
+        segment_buf.seek(0)
+        chart_files['segments'] = segment_buf
+        plt.close(fig)
+        
+        # Churn trend line chart
+        fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+        months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+        churn_values = [18.5, 17.8, 19.2, 18.1, 17.5, 18.8, 19.5, 18.3, 17.9, 18.6, 19.1, 18.3]
+        ax.plot(months, churn_values, marker='o', color='#2563eb', linewidth=2)
+        ax.fill_between(months, churn_values, alpha=0.3, color='#2563eb')
+        ax.set_title('Évolution du Taux de Churn sur 12 Mois', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Taux de Churn (%)')
+        ax.grid(True, alpha=0.3)
+        churn_buf = BytesIO()
+        fig.savefig(churn_buf, format='png', bbox_inches='tight', dpi=100)
+        churn_buf.seek(0)
+        chart_files['churn_trend'] = churn_buf
+        plt.close(fig)
+        
+        # Contract distribution bar chart
+        fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+        contract_counts = df['Contract'].value_counts()
+        ax.bar(list(contract_counts.index), list(contract_counts.values), color='#2563eb')
+        ax.set_title('Distribution par Type de Contrat', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Nombre de Clients')
+        contract_buf = BytesIO()
+        fig.savefig(contract_buf, format='png', bbox_inches='tight', dpi=100)
+        contract_buf.seek(0)
+        chart_files['contracts'] = contract_buf
+        plt.close(fig)
+        
+        # Create PDF using reportlab
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+        
+        # Créer styles personnalisés
+        base_styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle(
+            name='CustomTitle',
+            fontSize=24,
+            textColor=colors.HexColor('#2563eb'),
+            alignment=TA_CENTER,
+            spaceAfter=20,
+            fontName='Helvetica-Bold'
+        )
+        
+        subtitle_style = ParagraphStyle(
+            name='CustomSubtitle',
+            fontSize=12,
+            textColor=colors.HexColor('#64748b'),
+            alignment=TA_CENTER,
+            spaceAfter=30
+        )
+        
+        section_title_style = ParagraphStyle(
+            name='CustomSectionTitle',
+            fontSize=16,
+            textColor=colors.HexColor('#2563eb'),
+            spaceAfter=15,
+            spaceBefore=20,
+            fontName='Helvetica-Bold'
+        )
+        
+        body_text_style = ParagraphStyle(
+            name='CustomBodyText',
+            fontSize=11,
+            textColor=colors.HexColor('#1e293b'),
+            spaceAfter=10,
+            leading=16
+        )
+        
+        elements = []
+        
+        # Title
+        elements.append(Paragraph(request.title, title_style))
+        elements.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", subtitle_style))
+        elements.append(Spacer(1, 20))
+        
+        # Executive Summary
+        elements.append(Paragraph("Résumé Exécutif", section_title_style))
+        summary_text = f"Ce rapport présente une analyse complète de la base clients télécom avec <b>{total_customers:,}</b> clients. Le taux de churn actuel est de <b>{churn_rate}%</b>, avec un revenu moyen par utilisateur (ARPU) de <b>{arpu}€</b>."
+        elements.append(Paragraph(summary_text, body_text_style))
+        elements.append(Spacer(1, 20))
+        
+        # KPIs Table
+        elements.append(Paragraph("Indicateurs Clés de Performance (KPIs)", section_title_style))
+        kpi_data = [
+            ['Total Clients', 'Taux de Churn', 'ARPU', 'CLV Moyen'],
+            [f'{total_customers:,}', f'{churn_rate}%', f'{arpu}€', f'{clv}€']
+        ]
+        kpi_table = Table(kpi_data, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+        kpi_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#f8fafc')),
+            ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 1), (-1, 1), 14),
+            ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor('#2563eb')),
+            ('BOTTOMPADDING', (0, 1), (-1, 1), 15),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+        ]))
+        elements.append(kpi_table)
+        elements.append(PageBreak())
+        
+        # Segmentation
+        elements.append(Paragraph("Segmentation Clients", section_title_style))
+        chart_files['segments'].seek(0)
+        elements.append(Image(chart_files['segments'], width=14*cm, height=14*cm))
+        elements.append(Spacer(1, 20))
+        
+        segment_table_data = [
+            ['Segment', 'Part (%)', 'Caractéristiques', 'Actions'],
+            ['Premium Users', '15%', 'ARPU élevé, fidèles', 'Programme VIP'],
+            ['Heavy Data Users', '22%', 'Forte conso. data', 'Upgrade fibre'],
+            ['Voice Only', '18%', 'Téléphone uniquement', 'Cross-sell internet'],
+            ['Low ARPU', '20%', 'Budget serré', 'Promotions ciblées'],
+            ['At-Risk', '13%', 'Risque de churn', 'Rétention proactive'],
+            ['Loyal Base', '12%', 'Clients fidèles', 'Programme fidélité'],
+        ]
+        segment_table = Table(segment_table_data, colWidths=[3.5*cm, 2*cm, 5*cm, 5*cm])
+        segment_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8fafc')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(segment_table)
+        elements.append(PageBreak())
+        
+        # Churn Trend
+        elements.append(Paragraph("Évolution du Churn", section_title_style))
+        chart_files['churn_trend'].seek(0)
+        elements.append(Image(chart_files['churn_trend'], width=16*cm, height=8*cm))
+        elements.append(Spacer(1, 30))
+        
+        # Contract Distribution
+        elements.append(Paragraph("Distribution par Contrat", section_title_style))
+        chart_files['contracts'].seek(0)
+        elements.append(Image(chart_files['contracts'], width=16*cm, height=8*cm))
+        elements.append(PageBreak())
+        
+        # Recommendations
+        elements.append(Paragraph("Recommandations", section_title_style))
+        rec_data = [
+            ['Priorité', 'Action', 'Impact Attendu'],
+            ['Haute', 'Programme de rétention pour clients At-Risk', '-3% churn'],
+            ['Haute', "Campagne d'engagement pour nouveaux clients", '+15% rétention'],
+            ['Moyenne', 'Offres d\'upsell pour Low ARPU', '+10% ARPU'],
+            ['Moyenne', 'Programme VIP pour Premium Users', '+5% satisfaction'],
+        ]
+        rec_table = Table(rec_data, colWidths=[2.5*cm, 10*cm, 3.5*cm])
+        rec_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+        ]))
+        elements.append(rec_table)
+        elements.append(Spacer(1, 40))
+        
+        # Footer
+        elements.append(Paragraph("Rapport généré par TelcoAnalytics Pro | Confidentiel", subtitle_style))
+        
+        # Build PDF
+        doc.build(elements)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        
+        filename = f"telco_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        
+        return StreamingResponse(
+            BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(len(pdf_bytes))
+            }
+        )
     
-    # Calculate KPIs
-    total_customers = len(df)
-    churn_rate = round((df['Churn'].sum() / total_customers) * 100, 2)
-    arpu = round(df['MonthlyCharges'].mean(), 2)
-    clv = round(df['TotalCharges'].mean(), 2)
-    
-    # Generate charts as images
-    chart_files = {}
-    
-    # Segment pie chart
-    plt.style.use('default')
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
-    segment_labels = ['Premium', 'Heavy Data', 'Voice Only', 'Low ARPU', 'At-Risk', 'Loyal']
-    segment_values = [15, 22, 18, 20, 13, 12]
-    colors_pie = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4']
-    ax.pie(segment_values, labels=segment_labels, autopct='%1.1f%%', colors=colors_pie)
-    ax.set_title('Répartition des Segments Clients', fontsize=14, fontweight='bold')
-    segment_buf = BytesIO()
-    fig.savefig(segment_buf, format='png', bbox_inches='tight', dpi=100)
-    segment_buf.seek(0)
-    chart_files['segments'] = segment_buf
-    plt.close(fig)
-    
-    # Churn trend line chart
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
-    months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
-    churn_values = [18.5, 17.8, 19.2, 18.1, 17.5, 18.8, 19.5, 18.3, 17.9, 18.6, 19.1, 18.3]
-    ax.plot(months, churn_values, marker='o', color='#2563eb', linewidth=2)
-    ax.fill_between(months, churn_values, alpha=0.3, color='#2563eb')
-    ax.set_title('Évolution du Taux de Churn sur 12 Mois', fontsize=14, fontweight='bold')
-    ax.set_ylabel('Taux de Churn (%)')
-    ax.grid(True, alpha=0.3)
-    churn_buf = BytesIO()
-    fig.savefig(churn_buf, format='png', bbox_inches='tight', dpi=100)
-    churn_buf.seek(0)
-    chart_files['churn_trend'] = churn_buf
-    plt.close(fig)
-    
-    # Contract distribution bar chart
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
-    contract_counts = df['Contract'].value_counts()
-    ax.bar(list(contract_counts.index), list(contract_counts.values), color='#2563eb')
-    ax.set_title('Distribution par Type de Contrat', fontsize=14, fontweight='bold')
-    ax.set_ylabel('Nombre de Clients')
-    contract_buf = BytesIO()
-    fig.savefig(contract_buf, format='png', bbox_inches='tight', dpi=100)
-    contract_buf.seek(0)
-    chart_files['contracts'] = contract_buf
-    plt.close(fig)
-    
-    # Create PDF using reportlab
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-    
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='TitleStyle', fontSize=24, textColor=colors.HexColor('#2563eb'), alignment=TA_CENTER, spaceAfter=20, fontName='Helvetica-Bold'))
-    styles.add(ParagraphStyle(name='SubtitleStyle', fontSize=12, textColor=colors.HexColor('#64748b'), alignment=TA_CENTER, spaceAfter=30))
-    styles.add(ParagraphStyle(name='SectionTitle', fontSize=16, textColor=colors.HexColor('#2563eb'), spaceAfter=15, spaceBefore=20, fontName='Helvetica-Bold'))
-    styles.add(ParagraphStyle(name='BodyText', fontSize=11, textColor=colors.HexColor('#1e293b'), spaceAfter=10, leading=16))
-    
-    elements = []
-    
-    # Title
-    elements.append(Paragraph(request.title, styles['TitleStyle']))
-    elements.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", styles['SubtitleStyle']))
-    elements.append(Spacer(1, 20))
-    
-    # Executive Summary
-    elements.append(Paragraph("Résumé Exécutif", styles['SectionTitle']))
-    summary_text = f"Ce rapport présente une analyse complète de la base clients télécom avec <b>{total_customers:,}</b> clients. Le taux de churn actuel est de <b>{churn_rate}%</b>, avec un revenu moyen par utilisateur (ARPU) de <b>{arpu}€</b>."
-    elements.append(Paragraph(summary_text, styles['BodyText']))
-    elements.append(Spacer(1, 20))
-    
-    # KPIs Table
-    elements.append(Paragraph("Indicateurs Clés de Performance (KPIs)", styles['SectionTitle']))
-    kpi_data = [
-        ['Total Clients', 'Taux de Churn', 'ARPU', 'CLV Moyen'],
-        [f'{total_customers:,}', f'{churn_rate}%', f'{arpu}€', f'{clv}€']
-    ]
-    kpi_table = Table(kpi_data, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
-    kpi_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#f8fafc')),
-        ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 1), (-1, 1), 14),
-        ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor('#2563eb')),
-        ('BOTTOMPADDING', (0, 1), (-1, 1), 15),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
-    ]))
-    elements.append(kpi_table)
-    elements.append(PageBreak())
-    
-    # Segmentation
-    elements.append(Paragraph("Segmentation Clients", styles['SectionTitle']))
-    chart_files['segments'].seek(0)
-    elements.append(Image(chart_files['segments'], width=14*cm, height=14*cm))
-    elements.append(Spacer(1, 20))
-    
-    segment_table_data = [
-        ['Segment', 'Part (%)', 'Caractéristiques', 'Actions'],
-        ['Premium Users', '15%', 'ARPU élevé, fidèles', 'Programme VIP'],
-        ['Heavy Data Users', '22%', 'Forte conso. data', 'Upgrade fibre'],
-        ['Voice Only', '18%', 'Téléphone uniquement', 'Cross-sell internet'],
-        ['Low ARPU', '20%', 'Budget serré', 'Promotions ciblées'],
-        ['At-Risk', '13%', 'Risque de churn', 'Rétention proactive'],
-        ['Loyal Base', '12%', 'Clients fidèles', 'Programme fidélité'],
-    ]
-    segment_table = Table(segment_table_data, colWidths=[3.5*cm, 2*cm, 5*cm, 5*cm])
-    segment_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8fafc')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    elements.append(segment_table)
-    elements.append(PageBreak())
-    
-    # Churn Trend
-    elements.append(Paragraph("Évolution du Churn", styles['SectionTitle']))
-    chart_files['churn_trend'].seek(0)
-    elements.append(Image(chart_files['churn_trend'], width=16*cm, height=8*cm))
-    elements.append(Spacer(1, 30))
-    
-    # Contract Distribution
-    elements.append(Paragraph("Distribution par Contrat", styles['SectionTitle']))
-    chart_files['contracts'].seek(0)
-    elements.append(Image(chart_files['contracts'], width=16*cm, height=8*cm))
-    elements.append(PageBreak())
-    
-    # Recommendations
-    elements.append(Paragraph("Recommandations", styles['SectionTitle']))
-    rec_data = [
-        ['Priorité', 'Action', 'Impact Attendu'],
-        ['Haute', 'Programme de rétention pour clients At-Risk', '-3% churn'],
-        ['Haute', "Campagne d'engagement pour nouveaux clients", '+15% rétention'],
-        ['Moyenne', 'Offres d\'upsell pour Low ARPU', '+10% ARPU'],
-        ['Moyenne', 'Programme VIP pour Premium Users', '+5% satisfaction'],
-    ]
-    rec_table = Table(rec_data, colWidths=[2.5*cm, 10*cm, 3.5*cm])
-    rec_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
-    ]))
-    elements.append(rec_table)
-    elements.append(Spacer(1, 40))
-    
-    # Footer
-    elements.append(Paragraph("Rapport généré par TelcoAnalytics Pro | Confidentiel", styles['SubtitleStyle']))
-    
-    # Build PDF
-    doc.build(elements)
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    
-    filename = f"telco_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    
-    return StreamingResponse(
-        BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}",
-            "Content-Length": str(len(pdf_bytes))
-        }
-    )
+    except Exception as e:
+        logger.error(f"Erreur génération PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du PDF: {str(e)}")
 
 # ============== HEALTH CHECK ==============
 
@@ -879,12 +972,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting Telco Analytics API...")
-    await load_telco_data()
-    logger.info("Data loaded successfully")
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8080,
+        reload=True,
+        log_level="info"
+    )
