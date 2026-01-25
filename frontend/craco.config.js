@@ -48,28 +48,8 @@ const webpackConfig = {
     },
     configure: (webpackConfig) => {
 
-      webpackConfig.resolve.fallback = {
-        buffer: require.resolve('buffer/'),
-        crypto: require.resolve('crypto-browserify'),
-        path: require.resolve('path-browserify'),
-        process: require.resolve('process/browser'),
-        querystring: require.resolve('querystring-es3'),
-        stream: require.resolve('stream-browserify'),
-        http: require.resolve('stream-http'),
-        url: require.resolve('url/'),
-        fs: false,
-        zlib: false,
-        net: false,
-        tls: false,
-        child_process: false,
-        async_hooks: false,
-        util: require.resolve('util/'), // Ajouté
-        vm: require.resolve('vm-browserify'), // Ajouté
-      };
-
       // Add ignored patterns to reduce watched directories
-        
-      webpackConfig.watchOptions = {
+        webpackConfig.watchOptions = {
           ...webpackConfig.watchOptions,
           ignored: [
             '**/node_modules/**',
