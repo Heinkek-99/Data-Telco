@@ -1,0 +1,227 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  DOCKER_DRIVER: overlay2
+  MONGODB_URI: "mongodb://mongodb:27017"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        if: matrix.service == 'backend'
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Lint backend code
+        if: matrix.service == 'backend'
+        run: |
+          cd backend
+          pip install flake8 black isort mypy
+          echo "🔍 Linting backend code..."
+          flake8 . --max-line-length=120 --exclude=venv,__pycache__
+          black --check .
+          isort --check-only .
+          mypy server.py --ignore-missing-imports
+
+      - name: Set up Node.js
+        if: matrix.service == 'frontend'
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+
+      - name: Lint frontend code
+        if: matrix.service == 'frontend'
+        run: |
+          cd frontend
+          yarn install
+          echo "🔍 Linting frontend code..."
+          yarn run lint
+
+  build:
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build and push backend Docker image
+        if: matrix.service == 'backend'
+        run: |
+          echo "🏗️ Building backend Docker image..."
+          cd backend
+          docker build -t ${{ secrets.DOCKER_REGISTRY }}/backend:${{ github.sha }} .
+          docker push ${{ secrets.DOCKER_REGISTRY }}/backend:${{ github.sha }}
+
+      - name: Build and push frontend Docker image
+        if: matrix.service == 'frontend'
+        run: |
+          echo "🏗️ Building frontend Docker image..."
+          cd frontend
+          docker build -t ${{ secrets.DOCKER_REGISTRY }}/frontend:${{ github.sha }} .
+          docker push ${{ secrets.DOCKER_REGISTRY }}/frontend:${{ github.sha }}
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python for backend tests
+        if: matrix.service == 'backend'
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Install backend dependencies and run tests
+        if: matrix.service == 'backend'
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+          echo "🧪 Running backend tests..."
+          pytest tests/ -v --tb=short
+
+      - name: Set up Node.js for frontend tests
+        if: matrix.service == 'frontend'
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies and run tests
+        if: matrix.service == 'frontend'
+        run: |
+          cd frontend
+          npm ci
+          echo "🧪 Running frontend tests..."
+          npm run test -- --coverage --watchAll=false
+
+  security:
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python for security scan
+        if: matrix.service == 'backend'
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Security scan for backend
+        if: matrix.service == 'backend'
+        run: |
+          cd backend
+          pip install safety bandit
+          echo "🔒 Scanning backend dependencies for vulnerabilities..."
+          safety check --json
+          bandit -r . -f json -o bandit-report.json
+
+      - name: Set up Node.js for security scan
+        if: matrix.service == 'frontend'
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+
+      - name: Security scan for frontend
+        if: matrix.service == 'frontend'
+        run: |
+          cd frontend
+          npm ci
+          echo "🔒 Scanning frontend dependencies..."
+          npm audit --audit-level=moderate
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: security
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Deploy to staging
+        run: |
+          echo "🚀 Deploying to staging environment..."
+          docker-compose -f docker-compose.staging.yml down
+          docker-compose -f docker-compose.staging.yml up -d
+          sleep 10
+          curl -f http://staging.telco-api.com/api/health || exit 1
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: security
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Deploy backend to production
+        run: |
+          echo "🚀 Deploying backend to production..."
+          ssh -o StrictHostKeyChecking=no ${{ secrets.PROD_SERVER }} << 'EOF'
+            cd /var/www/telco-analytics
+            docker-compose pull backend
+            docker-compose up -d backend
+            docker system prune -af
+          EOF
+
+      - name: Deploy frontend to production
+        run: |
+          cd frontend
+          npm ci
+          echo "🚀 Building and deploying frontend to production..."
+          npm run build
+          npm install -g vercel
+          vercel --prod --token=${{ secrets.VERCEL_TOKEN }} --yes
+
+  notify:
+    runs-on: ubuntu-latest
+    if: always()  # Toujours exécuter cette étape
+    steps:
+      - name: Notify success or failure
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"✅ Pipeline succeeded for ${{ github.event.repository.name }} on branch ${{ github.ref }}\"}"
+          else
+            curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"❌ Pipeline failed for ${{ github.event.repository.name }} on branch ${{ github.ref }}. Job: ${{ job.name }}\"}"
+          fi
