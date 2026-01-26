@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [backend, frontend]
+        service: [Backend, frontend]
 
     steps:
       - name: Checkout code
@@ -29,18 +29,18 @@ jobs:
         run: ls -R
 
       - name: Set up Python
-        if: matrix.service == 'backend'
+        if: matrix.service == 'Backend'
         uses: actions/setup-python@v2
         with:
           python-version: '3.10'
 
-      - name: Lint backend code
-        if: matrix.service == 'backend'
+      - name: Lint Backend code
+        if: matrix.service == 'Backend'
         run: |
-          cd backend
+          cd Backend
           python -m pip install --upgrade pip
           pip install flake8 black isort mypy
-          echo "🔍 Linting backend code..."
+          echo "🔍 Linting Backend code..."
           flake8 . --max-line-length=120 --exclude=venv,__pycache__
           black --check .
           isort --check-only .
@@ -65,7 +65,7 @@ jobs:
     needs: lint
     strategy:
       matrix:
-        service: [backend, frontend]
+        service: [Backend, frontend]
 
     steps:
       - name: Checkout code
@@ -74,13 +74,13 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build and push backend Docker image
-        if: matrix.service == 'backend'
+      - name: Build and push Backend Docker image
+        if: matrix.service == 'Backend'
         run: |
-          echo "🏗️ Building backend Docker image..."
-          cd backend
-          docker build -t ${{ secrets.DOCKER_REGISTRY }}/backend:${{ github.sha }} .
-          docker push ${{ secrets.DOCKER_REGISTRY }}/backend:${{ github.sha }}
+          echo "🏗️ Building Backend Docker image..."
+          cd Backend
+          docker build -t ${{ secrets.DOCKER_REGISTRY }}/Backend:${{ github.sha }} .
+          docker push ${{ secrets.DOCKER_REGISTRY }}/Backend:${{ github.sha }}
 
       - name: Build and push frontend Docker image
         if: matrix.service == 'frontend'
@@ -95,25 +95,25 @@ jobs:
     needs: build
     strategy:
       matrix:
-        service: [backend, frontend]
+        service: [Backend, frontend]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Set up Python for backend tests
-        if: matrix.service == 'backend'
+      - name: Set up Python for Backend tests
+        if: matrix.service == 'Backend'
         uses: actions/setup-python@v2
         with:
           python-version: '3.10'
 
-      - name: Install backend dependencies and run tests
-        if: matrix.service == 'backend'
+      - name: Install Backend dependencies and run tests
+        if: matrix.service == 'Backend'
         run: |
-          cd backend
+          cd Backend
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
-          echo "🧪 Running backend tests..."
+          echo "🧪 Running Backend tests..."
           pytest tests/ -v --tb=short
 
       - name: Set up Node.js for frontend tests
@@ -135,24 +135,24 @@ jobs:
     needs: test
     strategy:
       matrix:
-        service: [backend, frontend]
+        service: [Backend, frontend]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
       - name: Set up Python for security scan
-        if: matrix.service == 'backend'
+        if: matrix.service == 'Backend'
         uses: actions/setup-python@v2
         with:
           python-version: '3.10'
 
-      - name: Security scan for backend
-        if: matrix.service == 'backend'
+      - name: Security scan for Backend
+        if: matrix.service == 'Backend'
         run: |
-          cd backend
+          cd Backend
           pip install safety bandit
-          echo "🔒 Scanning backend dependencies for vulnerabilities..."
+          echo "🔒 Scanning Backend dependencies for vulnerabilities..."
           safety check --json
           bandit -r . -f json -o bandit-report.json
 
@@ -195,13 +195,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Deploy backend to production
+      - name: Deploy Backend to production
         run: |
-          echo "🚀 Deploying backend to production..."
+          echo "🚀 Deploying Backend to production..."
           ssh -o StrictHostKeyChecking=no ${{ secrets.PROD_SERVER }} << 'EOF'
             cd /var/www/telco-analytics
-            docker-compose pull backend
-            docker-compose up -d backend
+            docker-compose pull Backend
+            docker-compose up -d Backend
             docker system prune -af
           EOF
 
