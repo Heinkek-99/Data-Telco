@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: telco-backend
+    env: python
+    plan: starter
+    region: frankfurt
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: MONGO_URL
+        value: mongodb+srv://...
+      - key: DB_NAME
+        value: telco_analytics
+      - key: JWT_SECRET
+        sync: false
