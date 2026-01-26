@@ -1,40 +1,34 @@
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import os
+import logging
+import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from io import BytesIO
+from typing import List, Optional, Dict, Any
 
+import numpy as np
+import pandas as pd
+import bcrypt
+import jwt
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
-import uuid
-from datetime import datetime, timezone, timedelta
-import jwt
-import bcrypt
-import pandas as pd
-import numpy as np
-from io import BytesIO
-import base64
-from contextlib import asynccontextmanager  
-
-# PDF Generation using reportlab
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm, mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm, mm
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
+from reportlab.lib.enums import TA_LEFT
 
+# Load environment variables
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -48,12 +42,17 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'telco-analytics-secret-key-2024')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24
 
-# ============== LIFESPAN ==============
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
+# ============== LIFESPAN ==============
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestion du cycle de vie de l'application"""
-    # Startup
     logger.info("Starting Telco Analytics API...")
     try:
         await load_telco_data()
@@ -63,19 +62,16 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown
     logger.info("Shutting down...")
     client.close()
 
 # ============== APP CREATION ==============
-
-# Create the main app
 app = FastAPI(
     title="Telco Customer Analytics API",
     description="API pour l'analyse et la prédiction du churn des clients dans le secteur des télécommunications.",
     version="1.0.0",
-    lifespan = lifespan
-    )
+    lifespan=lifespan
+)
 
 # Create a router with the /api prefix  
 api_router = APIRouter(prefix="/api")
@@ -83,15 +79,7 @@ api_router = APIRouter(prefix="/api")
 # Security
 security = HTTPBearer(auto_error=False)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 # ============== MODELS ==============
-
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -149,7 +137,6 @@ class ReportRequest(BaseModel):
     include_sections: List[str] = ["kpis", "churn", "segments", "trends"]
 
 # ============== AUTH HELPERS ==============
-
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -170,7 +157,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             status_code=401,
             detail="Token manquant",
             headers={"WWW-Authenticate": "Bearer"}
-    )
+        )
      
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -180,17 +167,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             status_code=401,
             detail="Token expiré",
             headers={"WWW-Authenticate": "Bearer"}
-            )
+        )
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=401,
             detail="Token invalide",
             headers={"WWW-Authenticate": "Bearer"}
-            )
+        )
 
 # ============== DATA LOADING ==============
-
-# CSV data cache
 telco_data = None
 
 async def load_telco_data():
@@ -198,31 +183,27 @@ async def load_telco_data():
     if telco_data is not None:
         return telco_data
     
-    # Check if data exists in MongoDB
     try:
         count = await db.customers.count_documents({})
         if count > 0:
             cursor = db.customers.find({}, {"_id": 0})
             data = await cursor.to_list(length=10000)
-            logger.info(f"Loaded {len(telco_data)} records from MongoDB")
+            logger.info(f"Loaded {len(data)} records from MongoDB")
             telco_data = pd.DataFrame(data)
             return telco_data
     except Exception as e:
         logger.error(f"Error loading data from MongoDB: {e}")   
     
-    # Load from CSV URL
     try:
         csv_url = "../data/Telco-Customer-Churn.csv"
         telco_data = pd.read_csv(csv_url)
         
-        # Clean data
         telco_data['TotalCharges'] = pd.to_numeric(telco_data['TotalCharges'], errors='coerce')
         telco_data['TotalCharges'].fillna(0, inplace=True)
         telco_data['Churn'] = telco_data['Churn'].map({'Yes': 1, 'No': 0})
 
         logger.info(f"Loaded {len(telco_data)} customer records from CSV")
 
-        # Store in MongoDB
         try:
             records = telco_data.to_dict('records')
             if records:
@@ -232,46 +213,12 @@ async def load_telco_data():
         except Exception as e:
             logger.error(f"Error storing data in MongoDB: {e}")
 
-        # logger.info(f"Loaded {len(telco_data)} customer records")
         return telco_data
     except Exception as e:
         logger.error(f"Error loading data: {e}")
-        # Return sample data
-        # telco_data = create_sample_data()
-        return null
-
-def create_sample_data():
-    np.random.seed(42)
-    n = 7043
-    
-    data = {
-        'customerID': [f'CUST-{i:05d}' for i in range(n)],
-        'gender': np.random.choice(['Male', 'Female'], n),
-        'SeniorCitizen': np.random.choice([0, 1], n, p=[0.84, 0.16]),
-        'Partner': np.random.choice(['Yes', 'No'], n),
-        'Dependents': np.random.choice(['Yes', 'No'], n),
-        'tenure': np.random.randint(0, 73, n),
-        'PhoneService': np.random.choice(['Yes', 'No'], n, p=[0.9, 0.1]),
-        'MultipleLines': np.random.choice(['Yes', 'No', 'No phone service'], n),
-        'InternetService': np.random.choice(['DSL', 'Fiber optic', 'No'], n, p=[0.34, 0.44, 0.22]),
-        'OnlineSecurity': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'OnlineBackup': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'DeviceProtection': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'TechSupport': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'StreamingTV': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'StreamingMovies': np.random.choice(['Yes', 'No', 'No internet service'], n),
-        'Contract': np.random.choice(['Month-to-month', 'One year', 'Two year'], n, p=[0.55, 0.21, 0.24]),
-        'PaperlessBilling': np.random.choice(['Yes', 'No'], n),
-        'PaymentMethod': np.random.choice(['Electronic check', 'Mailed check', 'Bank transfer (automatic)', 'Credit card (automatic)'], n),
-        'MonthlyCharges': np.random.uniform(18, 120, n),
-        'TotalCharges': np.random.uniform(20, 8700, n),
-        'Churn': np.random.choice([0, 1], n, p=[0.73, 0.27])
-    }
-    
-    return pd.DataFrame(data)
+        return None  # Remplacez null par None
 
 # ============== AUTH ENDPOINTS ==============
-
 @api_router.post("/auth/register", response_model=UserResponse)
 async def register(user: UserCreate):
     existing = await db.users.find_one({"email": user.email})
@@ -311,7 +258,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     return user
 
 # ============== DASHBOARD ENDPOINTS ==============
-
 @api_router.get("/dashboard/kpis", response_model=KPIResponse)
 async def get_kpis(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
@@ -336,7 +282,6 @@ async def get_kpis(current_user: dict = Depends(get_current_user)):
 async def get_churn_trends(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
     
-    # Churn by tenure buckets (simulating monthly data)
     df['tenure_bucket'] = pd.cut(df['tenure'], bins=[0, 6, 12, 24, 36, 48, 60, 72], 
                                   labels=['0-6', '7-12', '13-24', '25-36', '37-48', '49-60', '61-72'])
     
@@ -360,10 +305,8 @@ async def get_churn_reasons(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
     churned = df[df['Churn'] == 1]
     
-    # Analyze churn reasons based on service attributes
     reasons = []
     
-    # Contract type
     contract_churn = churned['Contract'].value_counts(normalize=True) * 100
     for contract, pct in contract_churn.items():
         reasons.append({
@@ -372,7 +315,6 @@ async def get_churn_reasons(current_user: dict = Depends(get_current_user)):
             'category': 'Contract'
         })
     
-    # Internet Service
     internet_churn = churned['InternetService'].value_counts(normalize=True) * 100
     for service, pct in internet_churn.items():
         if service != 'No':
@@ -382,7 +324,6 @@ async def get_churn_reasons(current_user: dict = Depends(get_current_user)):
                 'category': 'Service'
             })
     
-    # Sort by percentage and take top 10
     reasons = sorted(reasons, key=lambda x: x['percentage'], reverse=True)[:10]
     
     return {"reasons": reasons}
@@ -391,7 +332,6 @@ async def get_churn_reasons(current_user: dict = Depends(get_current_user)):
 async def get_revenue_by_segment(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
     
-    # Create segments based on ARPU
     df['segment'] = pd.cut(df['MonthlyCharges'], 
                            bins=[0, 30, 50, 70, 90, 120],
                            labels=['Basic', 'Standard', 'Plus', 'Premium', 'Enterprise'])
@@ -431,14 +371,11 @@ async def get_retention_by_offer(current_user: dict = Depends(get_current_user))
     return {"retention": result}
 
 # ============== CHURN PREDICTION ==============
-
 @api_router.post("/churn/predict", response_model=ChurnPredictionResponse)
 async def predict_churn(request: ChurnPredictionRequest, current_user: dict = Depends(get_current_user)):
-    # Business rules for churn prediction
     score = 0
     factors = {}
     
-    # Tenure factor (lower tenure = higher risk)
     if request.tenure < 6:
         score += 30
         factors['tenure'] = {'value': request.tenure, 'impact': 'high', 'message': 'Client nouveau (< 6 mois)'}
@@ -451,7 +388,6 @@ async def predict_churn(request: ChurnPredictionRequest, current_user: dict = De
     else:
         factors['tenure'] = {'value': request.tenure, 'impact': 'positive', 'message': 'Client fidèle (> 2 ans)'}
     
-    # Complaints factor
     if request.complaints >= 3:
         score += 25
         factors['complaints'] = {'value': request.complaints, 'impact': 'high', 'message': 'Nombreuses réclamations'}
@@ -461,7 +397,6 @@ async def predict_churn(request: ChurnPredictionRequest, current_user: dict = De
     else:
         factors['complaints'] = {'value': request.complaints, 'impact': 'positive', 'message': 'Aucune réclamation'}
     
-    # Contract type
     if request.contract_type.lower() == 'prepaid':
         score += 20
         factors['contract'] = {'value': request.contract_type, 'impact': 'high', 'message': 'Contrat prépayé (sans engagement)'}
@@ -469,31 +404,25 @@ async def predict_churn(request: ChurnPredictionRequest, current_user: dict = De
         score += 5
         factors['contract'] = {'value': request.contract_type, 'impact': 'low', 'message': 'Contrat postpayé'}
     
-    # Monthly charges
     if request.monthly_charges > 80:
         score += 10
         factors['charges'] = {'value': request.monthly_charges, 'impact': 'medium', 'message': 'Facture élevée'}
     
-    # Data usage (low usage = higher risk)
     if request.data_usage < 2:
         score += 15
         factors['data_usage'] = {'value': request.data_usage, 'impact': 'medium', 'message': 'Faible consommation data'}
     
-    # Internet service
     if request.internet_service == 'Fiber optic':
         score += 10
         factors['internet'] = {'value': request.internet_service, 'impact': 'medium', 'message': 'Fibre optique (plus volatile)'}
     
-    # Security services
     if request.online_security == 'No' and request.tech_support == 'No':
         score += 10
         factors['services'] = {'value': 'Aucun service additionnel', 'impact': 'medium', 'message': 'Pas de services de sécurité'}
     
-    # Cap score at 100
     score = min(score, 100)
     probability = score / 100
     
-    # Determine risk level
     if score >= 70:
         risk_level = "Élevé"
     elif score >= 40:
@@ -501,7 +430,6 @@ async def predict_churn(request: ChurnPredictionRequest, current_user: dict = De
     else:
         risk_level = "Faible"
     
-    # Generate recommendations
     recommendations = []
     if factors.get('tenure', {}).get('impact') in ['high', 'medium']:
         recommendations.append("Programme d'onboarding personnalisé pour les nouveaux clients")
@@ -529,16 +457,13 @@ async def predict_churn(request: ChurnPredictionRequest, current_user: dict = De
     )
 
 # ============== SEGMENTATION ==============
-
 @api_router.get("/segments", response_model=List[SegmentInfo])
 async def get_segments(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
     total = len(df)
     
-    # Define segments based on data analysis
     segments = []
     
-    # Premium Users (high ARPU, long tenure)
     premium = df[(df['MonthlyCharges'] > 90) & (df['tenure'] > 24)]
     segments.append(SegmentInfo(
         name="Premium Users",
@@ -558,7 +483,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
         color="#2563eb"
     ))
     
-    # Heavy Data Users
     heavy_data = df[df['InternetService'] == 'Fiber optic']
     segments.append(SegmentInfo(
         name="Heavy Data Users",
@@ -578,7 +502,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
         color="#10b981"
     ))
     
-    # Voice Only
     voice_only = df[(df['InternetService'] == 'No') & (df['PhoneService'] == 'Yes')]
     segments.append(SegmentInfo(
         name="Voice Only",
@@ -598,7 +521,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
         color="#f59e0b"
     ))
     
-    # Low ARPU
     low_arpu = df[df['MonthlyCharges'] < 40]
     segments.append(SegmentInfo(
         name="Low ARPU",
@@ -618,7 +540,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
         color="#8b5cf6"
     ))
     
-    # At-Risk
     at_risk = df[(df['Contract'] == 'Month-to-month') & (df['tenure'] < 12)]
     segments.append(SegmentInfo(
         name="At-Risk",
@@ -639,7 +560,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
         color="#ef4444"
     ))
     
-    # Loyal Base
     loyal = df[(df['Contract'].isin(['One year', 'Two year'])) & (df['tenure'] > 36)]
     segments.append(SegmentInfo(
         name="Loyal Base",
@@ -662,7 +582,6 @@ async def get_segments(current_user: dict = Depends(get_current_user)):
     return segments
 
 # ============== ANALYTICS ==============
-
 @api_router.get("/analytics/overview")
 async def get_analytics_overview(
     date_start: Optional[str] = None,
@@ -673,7 +592,6 @@ async def get_analytics_overview(
 ):
     df = await load_telco_data()
     
-    # Apply filters if provided
     filtered_df = df.copy()
     if customer_type:
         if customer_type == 'churned':
@@ -681,7 +599,6 @@ async def get_analytics_overview(
         elif customer_type == 'active':
             filtered_df = filtered_df[filtered_df['Churn'] == 0]
     
-    # Calculate metrics
     total = len(filtered_df)
     churned = filtered_df['Churn'].sum()
     
@@ -706,10 +623,8 @@ async def get_analytics_overview(
 async def get_analytics_trends(current_user: dict = Depends(get_current_user)):
     df = await load_telco_data()
     
-    # Simulate monthly trends (using tenure as proxy)
     months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
     
-    # Generate realistic trend data
     base_churn = df['Churn'].mean() * 100
     trends = []
     
@@ -726,26 +641,18 @@ async def get_analytics_trends(current_user: dict = Depends(get_current_user)):
     return {"trends": trends}
 
 # ============== PDF REPORTS ==============
-
-def generate_chart_base64(chart_type: str, data: dict) -> str:
-    """Generate chart and return as base64 - Not used but kept for compatibility"""
-    return ""
-
 @api_router.post("/reports/generate-pdf")
 async def generate_pdf_report(request: ReportRequest, current_user: dict = Depends(get_current_user)):
     try:
         df = await load_telco_data()
         
-        # Calculate KPIs
         total_customers = len(df)
         churn_rate = round((df['Churn'].sum() / total_customers) * 100, 2)
         arpu = round(df['MonthlyCharges'].mean(), 2)
         clv = round(df['TotalCharges'].mean(), 2)
         
-        # Generate charts as images
         chart_files = {}
         
-        # Segment pie chart
         plt.style.use('default')
         fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
         segment_labels = ['Premium', 'Heavy Data', 'Voice Only', 'Low ARPU', 'At-Risk', 'Loyal']
@@ -759,7 +666,6 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         chart_files['segments'] = segment_buf
         plt.close(fig)
         
-        # Churn trend line chart
         fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
         months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
         churn_values = [18.5, 17.8, 19.2, 18.1, 17.5, 18.8, 19.5, 18.3, 17.9, 18.6, 19.1, 18.3]
@@ -774,7 +680,6 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         chart_files['churn_trend'] = churn_buf
         plt.close(fig)
         
-        # Contract distribution bar chart
         fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
         contract_counts = df['Contract'].value_counts()
         ax.bar(list(contract_counts.index), list(contract_counts.values), color='#2563eb')
@@ -786,18 +691,16 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         chart_files['contracts'] = contract_buf
         plt.close(fig)
         
-        # Create PDF using reportlab
         buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2 * cm, leftMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm)
         
-        # Créer styles personnalisés
         base_styles = getSampleStyleSheet()
         
         title_style = ParagraphStyle(
             name='CustomTitle',
             fontSize=24,
             textColor=colors.HexColor('#2563eb'),
-            alignment=TA_CENTER,
+            alignment=TA_LEFT,
             spaceAfter=20,
             fontName='Helvetica-Bold'
         )
@@ -806,7 +709,7 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
             name='CustomSubtitle',
             fontSize=12,
             textColor=colors.HexColor('#64748b'),
-            alignment=TA_CENTER,
+            alignment=TA_LEFT,
             spaceAfter=30
         )
         
@@ -829,24 +732,21 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         
         elements = []
         
-        # Title
         elements.append(Paragraph(request.title, title_style))
         elements.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", subtitle_style))
         elements.append(Spacer(1, 20))
         
-        # Executive Summary
         elements.append(Paragraph("Résumé Exécutif", section_title_style))
         summary_text = f"Ce rapport présente une analyse complète de la base clients télécom avec <b>{total_customers:,}</b> clients. Le taux de churn actuel est de <b>{churn_rate}%</b>, avec un revenu moyen par utilisateur (ARPU) de <b>{arpu}€</b>."
         elements.append(Paragraph(summary_text, body_text_style))
         elements.append(Spacer(1, 20))
         
-        # KPIs Table
         elements.append(Paragraph("Indicateurs Clés de Performance (KPIs)", section_title_style))
         kpi_data = [
             ['Total Clients', 'Taux de Churn', 'ARPU', 'CLV Moyen'],
             [f'{total_customers:,}', f'{churn_rate}%', f'{arpu}€', f'{clv}€']
         ]
-        kpi_table = Table(kpi_data, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+        kpi_table = Table(kpi_data, colWidths=[4 * cm, 4 * cm, 4 * cm, 4 * cm])
         kpi_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -864,10 +764,9 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         elements.append(kpi_table)
         elements.append(PageBreak())
         
-        # Segmentation
         elements.append(Paragraph("Segmentation Clients", section_title_style))
         chart_files['segments'].seek(0)
-        elements.append(Image(chart_files['segments'], width=14*cm, height=14*cm))
+        elements.append(Image(chart_files['segments'], width=14 * cm, height=14 * cm))
         elements.append(Spacer(1, 20))
         
         segment_table_data = [
@@ -879,7 +778,7 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
             ['At-Risk', '13%', 'Risque de churn', 'Rétention proactive'],
             ['Loyal Base', '12%', 'Clients fidèles', 'Programme fidélité'],
         ]
-        segment_table = Table(segment_table_data, colWidths=[3.5*cm, 2*cm, 5*cm, 5*cm])
+        segment_table = Table(segment_table_data, colWidths=[3.5 * cm, 2 * cm, 5 * cm, 5 * cm])
         segment_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -894,19 +793,16 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         elements.append(segment_table)
         elements.append(PageBreak())
         
-        # Churn Trend
         elements.append(Paragraph("Évolution du Churn", section_title_style))
         chart_files['churn_trend'].seek(0)
-        elements.append(Image(chart_files['churn_trend'], width=16*cm, height=8*cm))
+        elements.append(Image(chart_files['churn_trend'], width=16 * cm, height=8 * cm))
         elements.append(Spacer(1, 30))
         
-        # Contract Distribution
         elements.append(Paragraph("Distribution par Contrat", section_title_style))
         chart_files['contracts'].seek(0)
-        elements.append(Image(chart_files['contracts'], width=16*cm, height=8*cm))
+        elements.append(Image(chart_files['contracts'], width=16 * cm, height=8 * cm))
         elements.append(PageBreak())
         
-        # Recommendations
         elements.append(Paragraph("Recommandations", section_title_style))
         rec_data = [
             ['Priorité', 'Action', 'Impact Attendu'],
@@ -915,7 +811,7 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
             ['Moyenne', 'Offres d\'upsell pour Low ARPU', '+10% ARPU'],
             ['Moyenne', 'Programme VIP pour Premium Users', '+5% satisfaction'],
         ]
-        rec_table = Table(rec_data, colWidths=[2.5*cm, 10*cm, 3.5*cm])
+        rec_table = Table(rec_data, colWidths=[2.5 * cm, 10 * cm, 3.5 * cm])
         rec_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -928,10 +824,8 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         elements.append(rec_table)
         elements.append(Spacer(1, 40))
         
-        # Footer
         elements.append(Paragraph("Rapport généré par TelcoAnalytics Pro | Confidentiel", subtitle_style))
         
-        # Build PDF
         doc.build(elements)
         pdf_bytes = buffer.getvalue()
         buffer.close()
@@ -952,7 +846,6 @@ async def generate_pdf_report(request: ReportRequest, current_user: dict = Depen
         raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du PDF: {str(e)}")
 
 # ============== HEALTH CHECK ==============
-
 @api_router.get("/")
 async def root():
     return {"message": "Telco Customer Analytics API", "status": "healthy"}
