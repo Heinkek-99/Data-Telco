@@ -40,6 +40,10 @@ jobs:
           cd Backend
           python -m pip install --upgrade pip
           pip install flake8 black isort mypy
+          echo "🔧 Formatting imports with isort..."
+          isort .
+          echo "🔧 Formatting code with black..."
+          black .
           echo "🔍 Linting Backend code..."
           flake8 . --max-line-length=120 --exclude=venv,__pycache__
           black --check .
