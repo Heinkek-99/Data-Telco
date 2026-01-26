@@ -25,6 +25,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
+      - name: List files
+        run: ls -R
+
       - name: Set up Python
         if: matrix.service == 'backend'
         uses: actions/setup-python@v2
@@ -35,6 +38,7 @@ jobs:
         if: matrix.service == 'backend'
         run: |
           cd backend
+          python -m pip install --upgrade pip
           pip install flake8 black isort mypy
           echo "🔍 Linting backend code..."
           flake8 . --max-line-length=120 --exclude=venv,__pycache__
