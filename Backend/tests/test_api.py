@@ -63,7 +63,7 @@ class TelcoAPITester:
                     )
                     self.log_result(name, True)
                     return True, response_data
-                except:
+                except Exception:
                     # For non-JSON responses (like PDF)
                     self.log_result(name, True)
                     return True, response.content
@@ -71,7 +71,7 @@ class TelcoAPITester:
                 try:
                     error_data = response.json()
                     details = f"Expected {expected_status}, got {response.status_code}. Error: {error_data}"
-                except:
+                except Exception:
                     details = f"Expected {expected_status}, got {response.status_code}. Response: {response.text[:200]}"
                 self.log_result(name, False, details)
                 return False, {}
@@ -277,7 +277,7 @@ class TelcoAPITester:
         print(f"⏱️  Duration: {duration:.2f}s")
 
         if self.failed_tests:
-            print(f"\n❌ FAILED TESTS:")
+            print("\n❌ FAILED TESTS:")
             for i, failure in enumerate(self.failed_tests, 1):
                 print(f"   {i}. {failure['test']}")
                 print(f"      {failure['details']}")
