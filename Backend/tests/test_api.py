@@ -290,8 +290,8 @@ class TelcoAPITester:
         if self.failed_tests:
             print(f"\n❌ FAILED TESTS:")
             for i, failure in enumerate(self.failed_tests, 1):
-                print(f"   {i}. {failure['test']}")
-                print(f"      {failure['details']}")
+                print(f"{i}.{failure['test']}")
+                print(f"{failure['details']}")
 
         return len(self.failed_tests) == 0
 
