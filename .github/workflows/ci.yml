@@ -151,31 +151,4 @@ jobs:
           cd frontend
           yarn audit --level moderate || true
 
-  # ============================
-  #        DEPLOY
-  # ============================
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: [security-backend, security-frontend]
-    if: github.ref == 'refs/heads/develop'
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Deploy to staging
-        run: |
-          echo "Deploying staging..."
-          docker-compose -f docker-compose.staging.yml up -d --build
-
-  deploy-production:
-    runs-on: ubuntu-latest
-    needs: [security-backend, security-frontend]
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Deploy to production
-        run: |
-          echo "Deploying production..."
-          docker-compose -f docker-compose.production.yml up -d --build
+  
