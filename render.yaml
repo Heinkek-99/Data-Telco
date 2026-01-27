@@ -3,8 +3,8 @@ services:
     name: data-telco-api
     env: python
     rootDir: Backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port 10000
+    buildCommand: pip install -r Backend/requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MONGO_URL
         sync: false
