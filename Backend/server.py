@@ -126,9 +126,9 @@ class UserResponse(BaseModel):
 
 class ChurnPredictionRequest(BaseModel):
     tenure: int = Field(..., description="Ancienneté en mois")
-    voice_usage: float = Field(..., description="Consommation voix (min/mois)")
-    data_usage: float = Field(..., description="Consommation data (GB/mois)")
-    complaints: int = Field(..., description="Nombre de réclamations")
+    voice_usage: float = Field(..., gt=0, description="Consommation voix (min/mois)")
+    data_usage: float = Field(..., gt=0, description="Consommation data (GB/mois)")
+    complaints: int = Field(..., ge=0, description="Nombre de réclamations")
     contract_type: str = Field(..., description="Type de contrat: prepaid/postpaid")
     monthly_charges: Optional[float] = 50.0
     internet_service: Optional[str] = "Fiber optic"

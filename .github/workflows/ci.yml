@@ -32,7 +32,7 @@ jobs:
           black .
           isort .
           flake8 . 
-          mypy Backend/server.py --ignore-missing-imports
+          mypy . --ignore-missing-imports
   lint-frontend:
     runs-on: ubuntu-latest
     steps:
