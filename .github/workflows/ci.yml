@@ -11,7 +11,7 @@ jobs:
   # ============================
   #        LINT
   # ============================
-  lint-backend:
+  lint-Backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -23,12 +23,12 @@ jobs:
 
       - name: Install lint tools
         run: |
-          cd backend
+          cd Backend
           pip install flake8 black isort mypy
 
-      - name: Lint backend
+      - name: Lint Backend
         run: |
-          cd backend
+          cd Backend
           flake8 .
           black --check .
           isort --check-only .
@@ -52,14 +52,14 @@ jobs:
       - name: Lint frontend
         run: |
           cd frontend
-          yarn lint
+          yarn add lint
 
   # ============================
   #        TESTS
   # ============================
-  test-backend:
+  test-Backend:
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: lint-Backend
     services:
       mongo:
         image: mongo:6.0
@@ -76,13 +76,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd backend
+          cd Backend
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
 
-      - name: Run backend tests
+      - name: Run Backend tests
         run: |
-          cd backend
+          cd Backend
           pytest tests/ -v --tb=short
 
   test-frontend:
@@ -110,9 +110,9 @@ jobs:
   # ============================
   #        SECURITY
   # ============================
-  security-backend:
+  security-Backend:
     runs-on: ubuntu-latest
-    needs: test-backend
+    needs: test-Backend
 
     steps:
       - uses: actions/checkout@v3
@@ -124,7 +124,7 @@ jobs:
 
       - name: Security scan
         run: |
-          cd backend
+          cd Backend
           pip install safety bandit
           safety check
           bandit -r .
@@ -151,7 +151,7 @@ jobs:
   # ============================
   deploy-staging:
     runs-on: ubuntu-latest
-    needs: [security-backend, security-frontend]
+    needs: [security-Backend, security-frontend]
     if: github.ref == 'refs/heads/develop'
 
     steps:
@@ -164,7 +164,7 @@ jobs:
 
   deploy-production:
     runs-on: ubuntu-latest
-    needs: [security-backend, security-frontend]
+    needs: [security-Backend, security-frontend]
     if: github.ref == 'refs/heads/main'
 
     steps:
