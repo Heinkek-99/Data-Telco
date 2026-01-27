@@ -1,6 +1,9 @@
 # backend/Dockerfile
 FROM python:3.10-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 
+ENV PYTHONUNBUFFERED=1
+
 # Définir le répertoire de travail
 WORKDIR /app
 

@@ -1,10 +1,10 @@
 # frontend/Dockerfile
-FROM node:18
+FROM node:20-alpine
 
 WORKDIR /app
 
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+RUN yarn install --network-timeout 600000
 
 COPY . .
 
