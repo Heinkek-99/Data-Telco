@@ -1,41 +1,41 @@
 #!/usr/bin/env python3
 
+import logging
+import os
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import bcrypt
+import jwt
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field
+from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
 from reportlab.platypus import (
-    SimpleDocTemplate,
+    Image,
+    PageBreak,
     Paragraph,
+    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
-    Image,
-    PageBreak,
 )
-from reportlab.lib.units import cm
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from motor.motor_asyncio import AsyncIOMotorClient
 from starlette.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
-import matplotlib.pyplot as plt
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-import uuid
-from datetime import datetime, timezone, timedelta
-import jwt
-import bcrypt
-import pandas as pd
-import numpy as np
-from io import BytesIO
-from contextlib import asynccontextmanager
-
-import matplotlib
 
 matplotlib.use("Agg")
 

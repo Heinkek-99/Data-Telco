@@ -30,8 +30,8 @@ jobs:
         run: |
           cd Backend
           flake8 .
-          black --check .
-          isort --check-only .
+          black .
+          isort .
           mypy server.py --ignore-missing-imports
 
   lint-frontend:

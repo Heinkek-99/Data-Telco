@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
-import requests
-import sys
 import json
-from datetime import datetime
+import sys
 import time
+from datetime import datetime
+
+import requests
 
 
 class TelcoAPITester:
