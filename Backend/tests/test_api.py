@@ -16,7 +16,7 @@ class TelcoAPITester:
         self.tests_passed = 0
         self.failed_tests = []
         self.user_email = f"test_user_{datetime.now().strftime('%H%M%S')}@test.com"
-        self.user_password = "TestPass123!"
+        self.user_password = "TestPass123!" # nosec B105
         self.user_name = "Test User"
 
     def log_result(self, test_name, success, details=""):

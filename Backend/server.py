@@ -353,7 +353,7 @@ async def login(credentials: UserLogin):
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     user = await db.users.find_one(
-        {"id": current_user["user_id"]}, {"_id": 0, "password": 0}
+        {"id": current_user["user_id"]}, {"_id": 0, "password": 0} # nosec B105
     )
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
@@ -1232,4 +1232,4 @@ app.add_middleware(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("server:app", host="0.0.0.0", port=8080, reload=True, log_level="info")
+    uvicorn.run("server:app", host="0.0.0.0", port=8080, reload=True)  # nosec B104
