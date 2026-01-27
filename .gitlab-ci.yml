@@ -26,9 +26,9 @@ lint-Backend:
     - pip install flake8 black isort mypy
   script:
     - echo "🔍 Linting Backend..."
-    - flake8 .
     - black --check .
     - isort --check-only .
+    - flake8 .
     - mypy server.py --ignore-missing-imports
   only:
     changes:
@@ -108,7 +108,7 @@ test-Backend:
     - pip install pytest pytest-asyncio httpx
   script:
     - echo "🧪 Running Backend tests..."
-    - pytest tests/ -v --tb=short
+    - python tests/ -v --tb=short
   artifacts:
     reports:
       junit: Backend/test-results.xml
