@@ -592,7 +592,7 @@ async def predict_churn(
         }
 
     # Data usage (low usage = higher risk)
-    if request.data_usage is not None and request.data_usage < 2:
+    if request.data_usage < 2.0:
         score += 15
         factors["data_usage"] = {
             "value": request.data_usage,

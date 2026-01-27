@@ -13,3 +13,6 @@ services:
         value: telco_analytics
       - key: JWT_SECRET
         sync: false
+      - key: PIP_ONLY_BINARY
+        value: ":all:"
+
