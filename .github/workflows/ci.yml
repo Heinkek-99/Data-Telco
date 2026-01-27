@@ -24,7 +24,7 @@ jobs:
       - name: Install lint tools
         run: |
           cd Backend
-          pip install flake8 black isort mypy
+          pip install flake8 black isort mypy types-requests
 
       - name: Lint Backend
         run: |
