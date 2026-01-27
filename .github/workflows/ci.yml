@@ -28,11 +28,11 @@ jobs:
 
       - name: Lint Backend
         run: |
-          cd Backend
+          # cd Backend
           flake8 .
           black .
           isort .
-          mypy server.py --ignore-missing-imports
+          mypy Backend/server.py --ignore-missing-imports
 
   lint-frontend:
     runs-on: ubuntu-latest
